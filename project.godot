@@ -1,0 +1,11 @@
+config_version=5
+
+[application]
+
+config/name="GameJam"
+run/main_scene="res://scenes/main_menu/MainMenu.tscn"
+
+[autoload]
+
+GameManager="*res://autoload/GameManager.gd"
+SceneManager="*res://autoload/SceneManager.gd"
