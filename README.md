@@ -1,3 +1,3 @@
 # GameJam
 
-Game Jam project repo.
+Game Jam project repo. Sheesh can edit.
