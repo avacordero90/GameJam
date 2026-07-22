@@ -1,0 +1,786 @@
+so this is just an example of the player controller for the rounds sequel / clone, it has a lot of stuff in here we wont need, just an example.
+
+
+extends CharacterBody3D
+
+enum State { IDLE, MOVE, JUMP, BLOCK, DASH, CROUCH }
+
+@export_category("Multiplayer Setup")
+@export var player_index: int = 1
+
+@export_category("Base Movement Parameters")
+@export var base_speed: float = 8.0
+@export var ground_acceleration: float = 70.0
+@export var air_acceleration: float = 20.0
+@export var ground_friction: float = 120.0
+@export var air_friction: float = 45.0
+
+@export_category("Base Weapon Parameters")
+@export var base_attack_speed: float = 0.2
+@export var base_magazine_size: int = 10
+@export var base_reload_time: float = 1.5
+@export var base_projectiles_per_shot: int = 1
+@export var base_projectile_spread_degrees: float = 15.0
+
+@export_category("Visual Offsets")
+@export var arm_visual_offset: Vector3 = Vector3.ZERO
+
+@export_category("Utility Parameters")
+@export var utility_scene: PackedScene = preload("res://scenes/modules/Flashbang.tscn")
+@export var utility_cooldown: float = 5.0
+@export var utility_throw_force: float = 12.0
+
+@export_category("Base Jump & Gravity Parameters")
+@export var base_jump_velocity: float = 20.0
+@export var variable_jump_multiplier: float = 0.5
+@export var coyote_time: float = 0.15
+@export var jump_buffer_time: float = 0.1
+@export var base_gravity: float = 40.0
+@export var fall_gravity_multiplier: float = 1.25
+@export var apex_gravity_multiplier: float = 0.5
+@export var terminal_velocity: float = 60.0
+
+@export_category("Base Dash Parameters")
+@export var base_dash_speed: float = 16.0
+@export var base_dash_duration: float = 0.2
+@export var base_dash_cooldown: float = 2.0
+
+@export_category("Jump Settings")
+@export var jump_cooldown: float = 0.2
+
+@export_category("IK Settings")
+@export var arm_roll_degrees: float = 0.00
+
+@export_category("Base Block Parameters")
+@export var base_block_duration: float = 0.2
+@export var base_block_cooldown: float = 5.0
+
+@export_category("Wall Jump Parameters")
+@export var wall_jump_push_force: float = 4.0
+@export var wall_jump_up_force: float = 15.0
+
+# Components (Pre-instantiated to guarantee non-Nil references immediately)
+var stat_engine: StatEngine = StatEngine.new()
+var health_component: HealthComponent = HealthComponent.new()
+
+# State tracking
+var current_state: State = State.IDLE
+var is_dashing: bool = false
+var dash_time_left: float = 0.0
+var dash_cooldown_left: float = 0.0
+var last_facing_dir: float = 1.0
+
+# Jump Timers
+var coyote_time_left: float = 0.0
+var jump_buffer_left: float = 0.0
+
+# Block state
+var is_blocking: bool = false
+var block_time_left: float = 0.0
+var block_cooldown_left: float = 0.0
+
+var current_ammo: int = 0
+var attack_cooldown_left: float = 0.0
+var reload_time_left: float = 0.0
+var is_reloading: bool = false
+var utility_cooldown_left: float = 0.0
+
+@onready var wall_sensors: RayCast3D = $WallSensors
+@onready var block_shield: Area3D = $BlockShield
+@onready var state_machine: Node = $StateMachine
+@onready var gun_muzzle: Marker3D = $GunMuzzle
+@onready var anim_player: AnimationPlayer = $playermodel/playermodel/AnimationPlayer if has_node("playermodel/playermodel/AnimationPlayer") else null
+@onready var arm_sprite: Sprite3D = $ArmSprite if has_node("ArmSprite") else null
+@onready var character_model: Node3D = $playermodel if has_node("playermodel") else null
+
+var aim_target: Marker3D
+var input_prefix: String = "p1_"
+var velocity_label: Label3D = null
+var last_aim_dir: Vector3 = Vector3.RIGHT
+var crouch_speed: float = 1.6
+@onready var collision_shape: CollisionShape3D = $CollisionShape3D
+var original_capsule_height: float = 1.82
+var original_capsule_y: float = -0.052
+
+@onready var projectile_scene: PackedScene = preload("res://projectile.tscn")
+
+func _ready() -> void:
+	# Configure prefix based on player index
+	input_prefix = "p%d_" % player_index
+	
+	# Enforce composition elements
+	_ensure_components()
+	
+	current_ammo = int(stat_engine.get_stat("magazine_size"))
+	last_aim_dir = Vector3.RIGHT if player_index == 1 else Vector3.LEFT
+	
+	if collision_shape and collision_shape.shape is CapsuleShape3D:
+		original_capsule_height = collision_shape.shape.height
+		original_capsule_y = collision_shape.position.y
+	
+	# Enforce 2.5D Constraints
+	axis_lock_linear_z = true
+	axis_lock_angular_x = true
+	axis_lock_angular_y = true
+	axis_lock_angular_z = true
+	
+	if character_model:
+		var skeletons = character_model.find_children("*", "Skeleton3D", true, false)
+		if skeletons.size() > 0:
+			var skel = skeletons[0]
+			
+			# Disable imported physical bones to prevent physics glitches
+			var physical_bones = skel.find_children("*", "PhysicalBone3D", true, false)
+			for p_bone in physical_bones:
+				p_bone.collision_layer = 0
+				p_bone.collision_mask = 0
+			
+			# Attach Shield to Hips
+			var shield_attachment = BoneAttachment3D.new()
+			shield_attachment.bone_name = "Hips"
+			skel.add_child(shield_attachment)
+			
+			var shield_parent = block_shield.get_parent()
+			if shield_parent:
+				shield_parent.remove_child(block_shield)
+				shield_attachment.add_child(block_shield)
+				block_shield.position = Vector3.ZERO
+				
+			# Attach Gun Muzzle to Right Hand or custom attachment
+			if has_node("ArmSprite/MuzzlePoint"):
+				gun_muzzle = $ArmSprite/MuzzlePoint
+			else:
+				var pistol_attachment = skel.find_children("BoneAttachment3D", "BoneAttachment3D", true, false)
+				if pistol_attachment.size() > 0:
+					if gun_muzzle.get_parent() != null:
+						gun_muzzle.get_parent().remove_child(gun_muzzle)
+					pistol_attachment[0].add_child(gun_muzzle)
+					gun_muzzle.transform = Transform3D()
+			
+			# Setup aim target for manual arm pointing
+			aim_target = Marker3D.new()
+			aim_target.name = "AimTarget"
+			add_child(aim_target)
+	
+	# Initialize Inputs for this specific player index
+	_setup_inputs()
+	
+	# Ensure BlockShield is off initially, and its visual is configured
+	if block_shield:
+		block_shield.hide()
+		block_shield.monitoring = false
+		block_shield.monitorable = false
+		var shield_visual = block_shield.get_node_or_null("ShieldVisual") as Sprite3D
+		if shield_visual:
+			shield_visual.show() # Set to visible so it inherits parent visibility
+			# Apply blueprint shader to shield sprite for visual consistency
+			var bp_shader: Shader = load("res://assets/shaders/blueprint_sprite.gdshader")
+			if bp_shader and shield_visual.texture:
+				var bp_mat: ShaderMaterial = ShaderMaterial.new()
+				bp_mat.shader = bp_shader
+				bp_mat.set_shader_parameter("sprite_tex", shield_visual.texture)
+				bp_mat.set_shader_parameter("silhouette_color", Color.WHITE)
+				bp_mat.render_priority = 1
+				shield_visual.material_override = bp_mat
+		
+	_change_state(State.IDLE)
+	
+	# Apply blueprint silhouette material to arm sprite
+	if arm_sprite:
+		var bp_shader: Shader = load("res://assets/shaders/blueprint_sprite.gdshader")
+		if bp_shader:
+			var bp_mat: ShaderMaterial = ShaderMaterial.new()
+			bp_mat.shader = bp_shader
+			bp_mat.set_shader_parameter("sprite_tex", arm_sprite.texture)
+			bp_mat.set_shader_parameter("silhouette_color", Color.WHITE)
+			bp_mat.render_priority = 1
+			arm_sprite.material_override = bp_mat
+			
+	# Dynamic Velocity and State Annotation Label3D (technical mono-font look)
+	velocity_label = Label3D.new()
+	velocity_label.name = "VelocityLabel"
+	velocity_label.pixel_size = 0.005
+	velocity_label.billboard = BaseMaterial3D.BILLBOARD_DISABLED # flat on 2.5D plane
+	velocity_label.no_depth_test = true
+	velocity_label.render_priority = 3
+	velocity_label.font_size = 28
+	velocity_label.outline_size = 4
+	velocity_label.modulate = Color(0.3, 0.8, 1.0, 1.0) # cyan drafting color
+	velocity_label.position = Vector3(0, 1.1, 0) # above player's head
+	add_child.call_deferred(velocity_label)
+
+func _ensure_components() -> void:
+	if has_node("StatEngine"):
+		var old = stat_engine
+		stat_engine = get_node("StatEngine")
+		if old and old != stat_engine:
+			old.free()
+	else:
+		if not stat_engine.is_inside_tree():
+			stat_engine.name = "StatEngine"
+			add_child(stat_engine)
+		
+	if has_node("HealthComponent"):
+		var old = health_component
+		health_component = get_node("HealthComponent")
+		if old and old != health_component:
+			old.free()
+	else:
+		if not health_component.is_inside_tree():
+			health_component.name = "HealthComponent"
+			add_child(health_component)
+		
+	if not stat_engine.stats_recalculated.is_connected(_on_stats_recalculated):
+		stat_engine.stats_recalculated.connect(_on_stats_recalculated)
+	_on_stats_recalculated() # pull initial health value
+
+func _on_stats_recalculated() -> void:
+	if health_component and stat_engine:
+		health_component.max_health = stat_engine.get_stat("max_health", 100.0)
+
+## Clean reset for new sub-rounds or points
+func reset_player(spawn_point: Vector3) -> void:
+	global_position = spawn_point
+	global_position.z = 0.0
+	velocity = Vector3.ZERO
+	is_dashing = false
+	is_blocking = false
+	is_reloading = false
+	dash_time_left = 0.0
+	block_time_left = 0.0
+	reload_time_left = 0.0
+	attack_cooldown_left = 0.0
+	
+	if health_component:
+		health_component.reset()
+	if stat_engine:
+		current_ammo = int(stat_engine.get_stat("magazine_size"))
+		
+	if block_shield:
+		block_shield.hide()
+		block_shield.monitoring = false
+		block_shield.monitorable = false
+		
+	_change_state(State.IDLE)
+	set_redacted(false)
+
+func _physics_process(delta: float) -> void:
+	if health_component and health_component.is_dead:
+		return
+		
+	# HP Regeneration
+	var hp_regen = stat_engine.get_stat("regenerate_hp", 0.0)
+	if hp_regen > 0.0 and health_component:
+		health_component.heal(hp_regen * delta)
+		
+	# Dynamic stats retrieval
+	var speed = stat_engine.get_stat("speed")
+	var gravity = stat_engine.get_stat("gravity")
+	var jump_velocity = stat_engine.get_stat("jump_velocity")
+	var magazine_size = int(stat_engine.get_stat("magazine_size"))
+	var attack_speed = stat_engine.get_stat("attack_speed")
+	var reload_time = stat_engine.get_stat("reload_time")
+	var projectiles_per_shot = int(stat_engine.get_stat("projectiles_per_shot"))
+	var block_duration = stat_engine.get_stat("block_duration")
+	var block_cooldown = stat_engine.get_stat("block_cooldown")
+	var dash_cooldown = stat_engine.get_stat("dash_cooldown")
+	var dash_duration = stat_engine.get_stat("dash_duration")
+	
+	# Update Timers
+	if dash_time_left > 0:
+		dash_time_left -= delta
+		if dash_time_left <= 0:
+			is_dashing = false
+			if is_on_floor():
+				_change_state(State.IDLE)
+			else:
+				_change_state(State.JUMP)
+	
+	if dash_cooldown_left > 0:
+		dash_cooldown_left -= delta
+
+	if is_on_floor():
+		coyote_time_left = coyote_time
+	else:
+		coyote_time_left -= delta
+		
+	if jump_buffer_left > 0:
+		jump_buffer_left -= delta
+
+	if Input.is_action_just_pressed(input_prefix + "jump"):
+		jump_buffer_left = jump_buffer_time
+		
+	# Weapon Timers
+	if attack_cooldown_left > 0:
+		attack_cooldown_left -= delta
+		
+	if is_reloading:
+		reload_time_left -= delta
+		if reload_time_left <= 0:
+			is_reloading = false
+			current_ammo = magazine_size
+			
+	if utility_cooldown_left > 0:
+		utility_cooldown_left -= delta
+
+	# Handle Reloading
+	if Input.is_action_just_pressed(input_prefix + "reload") and current_ammo < magazine_size and not is_reloading:
+		_start_reload(reload_time)
+
+	if Input.is_action_pressed(input_prefix + "shoot") and not is_reloading and attack_cooldown_left <= 0:
+		if current_ammo > 0:
+			_shoot(projectiles_per_shot)
+			current_ammo -= 1
+			attack_cooldown_left = attack_speed
+			if current_ammo <= 0:
+				_start_reload(reload_time)
+		else:
+			_start_reload(reload_time)
+
+	# Handle Utility
+	if Input.is_action_just_pressed(input_prefix + "utility") and utility_cooldown_left <= 0:
+		_use_utility()
+
+	if block_cooldown_left > 0:
+		block_cooldown_left -= delta
+
+	# Handle Blocking
+	if is_blocking:
+		block_time_left -= delta
+		if block_time_left <= 0 or not Input.is_action_pressed(input_prefix + "block"):
+			_stop_blocking()
+	elif Input.is_action_just_pressed(input_prefix + "block") and block_cooldown_left <= 0:
+		_start_blocking(block_duration, block_cooldown)
+
+	# Handle Crouching
+	var wants_crouch = Input.is_action_pressed(input_prefix + "crouch")
+	
+	if wants_crouch:
+		if is_on_floor() and not is_dashing and not is_blocking:
+			if current_state != State.CROUCH:
+				_change_state(State.CROUCH)
+				
+				# Scale down collision shape to allow walking under low platforms
+				if collision_shape and collision_shape.shape is CapsuleShape3D:
+					collision_shape.shape.height = 0.9
+					collision_shape.position.y = original_capsule_y - (original_capsule_height - 0.9) / 2.0
+	else:
+		if current_state == State.CROUCH:
+			if _can_stand_up():
+				# Restore shape height and position
+				if collision_shape and collision_shape.shape is CapsuleShape3D:
+					collision_shape.shape.height = original_capsule_height
+					collision_shape.position.y = original_capsule_y
+					
+				# Transition out
+				var input_dir_temp := Input.get_axis(input_prefix + "move_left", input_prefix + "move_right")
+				if input_dir_temp != 0:
+					_change_state(State.MOVE)
+				else:
+					_change_state(State.IDLE)
+
+	# Handle Dashing
+	if Input.is_action_just_pressed(input_prefix + "dash") and dash_cooldown_left <= 0 and not is_dashing:
+		# Stand up before dashing if crouching and able to do so
+		var can_dash_allowed = true
+		if current_state == State.CROUCH:
+			if _can_stand_up():
+				if collision_shape and collision_shape.shape is CapsuleShape3D:
+					collision_shape.shape.height = original_capsule_height
+					collision_shape.position.y = original_capsule_y
+			else:
+				can_dash_allowed = false
+				
+		if can_dash_allowed:
+			_start_dash(dash_duration, dash_cooldown)
+
+	if is_dashing:
+		velocity.x = last_facing_dir * base_dash_speed
+		# Clip horizontal speed to Jolt physics safety bounds
+		velocity.x = clamp(velocity.x, -24.0, 24.0)
+		velocity.y = 0.0 
+		move_and_slide()
+		_enforce_planar_constraints()
+		return
+
+	# Apply Gravity
+	_apply_gravity(gravity, delta)
+
+	# Handle Jump & Wall Jump
+	var can_jump = is_on_floor() or coyote_time_left > 0
+	
+	if jump_buffer_left > 0:
+		var allowed_to_jump = true
+		if current_state == State.CROUCH:
+			if _can_stand_up():
+				if collision_shape and collision_shape.shape is CapsuleShape3D:
+					collision_shape.shape.height = original_capsule_height
+					collision_shape.position.y = original_capsule_y
+			else:
+				allowed_to_jump = false
+				
+		if allowed_to_jump:
+			if can_jump:
+				velocity.y = jump_velocity
+				coyote_time_left = 0.0
+				jump_buffer_left = 0.0
+				_change_state(State.JUMP)
+			elif is_on_wall_only() and Input.is_action_just_pressed(input_prefix + "jump"):
+				_handle_wall_jump()
+				coyote_time_left = 0.0
+				jump_buffer_left = 0.0
+				_change_state(State.JUMP)
+
+	if Input.is_action_just_released(input_prefix + "jump"):
+		if velocity.y > 0:
+			velocity.y *= variable_jump_multiplier
+
+	var input_dir := Input.get_axis(input_prefix + "move_left", input_prefix + "move_right")
+	
+	var current_accel = ground_acceleration if is_on_floor() else air_acceleration
+	var current_frict = ground_friction if is_on_floor() else air_friction
+
+	var target_speed = speed
+	if current_state == State.CROUCH:
+		target_speed = crouch_speed
+
+	if input_dir != 0:
+		velocity.x = move_toward(velocity.x, input_dir * target_speed, current_accel * delta)
+		# Safety velocity clamp to prevent geometric wall clipping
+		velocity.x = clamp(velocity.x, -24.0, 24.0)
+		last_facing_dir = input_dir
+		if is_on_floor() and current_state != State.DASH and current_state != State.CROUCH:
+			_change_state(State.MOVE)
+	else:
+		velocity.x = move_toward(velocity.x, 0, current_frict * delta)
+		if is_on_floor() and current_state != State.DASH and current_state != State.CROUCH:
+			_change_state(State.IDLE)
+
+	move_and_slide()
+	_enforce_planar_constraints()
+	
+	# Determine Aim Direction: Mouse for P1, Right Joystick / Facing for Controller/P2
+	var aim_dir = Vector3.RIGHT * last_facing_dir
+	var camera = get_viewport().get_camera_3d()
+	
+	# Query joystick motion
+	var joy_x = Input.get_joy_axis(player_index - 1, JoyAxis.JOY_AXIS_RIGHT_X)
+	var joy_y = -Input.get_joy_axis(player_index - 1, JoyAxis.JOY_AXIS_RIGHT_Y)
+	
+	if abs(joy_x) > 0.25 or abs(joy_y) > 0.25:
+		aim_dir = Vector3(joy_x, joy_y, 0.0).normalized()
+	elif player_index == 1 and camera:
+		var mouse_pos = get_viewport().get_mouse_position()
+		var distance = camera.global_position.z - global_position.z
+		var target_pos = camera.project_position(mouse_pos, distance)
+		target_pos.z = 0.0
+		aim_dir = (target_pos - global_position).normalized()
+		
+	# Store the resolved aim direction
+	last_aim_dir = aim_dir
+		
+	if aim_target:
+		aim_target.global_position = global_position + aim_dir * 10.0
+			
+	if character_model:
+		if last_facing_dir > 0:
+			character_model.rotation_degrees.y = 90
+		elif last_facing_dir < 0:
+			character_model.rotation_degrees.y = -90
+			
+		# 2D Sprite Arm Pointing and 3D Arm Hiding
+		if arm_sprite and aim_target:
+			var skel = character_model.find_children("*", "Skeleton3D", true, false)[0]
+			var bone_idx = skel.find_bone("RightShoulder")
+			if bone_idx == -1:
+				bone_idx = skel.find_bone("RightUpperArm")
+				
+			var upper_arm_idx = skel.find_bone("RightUpperArm")
+			
+			if upper_arm_idx != -1:
+				# Hide 3D arm
+				var hide_pose = skel.get_bone_global_pose_no_override(upper_arm_idx)
+				hide_pose.basis = hide_pose.basis.scaled(Vector3(0.001, 0.001, 0.001))
+				skel.set_bone_global_pose_override(upper_arm_idx, hide_pose, 1.0, true)
+				
+				# Position Sprite
+				if bone_idx != -1:
+					var shoulder_global = skel.global_transform * skel.get_bone_global_pose_no_override(bone_idx)
+					
+					var current_offset = arm_visual_offset
+					if last_facing_dir < 0:
+						current_offset.x = -current_offset.x
+						
+					arm_sprite.global_position = shoulder_global.origin + current_offset
+				
+				var target_pos = aim_target.global_position
+				var dir = arm_sprite.global_position.direction_to(target_pos)
+				var angle = atan2(dir.y, dir.x)
+				
+				arm_sprite.global_rotation = Vector3(0, 0, angle)
+				arm_sprite.flip_v = true if dir.x < 0 else false
+				
+	# Update Crouch animation dynamically based on physical movement velocity
+	if current_state == State.CROUCH and anim_player:
+		if abs(velocity.x) > 0.1:
+			if anim_player.current_animation != "Crouch_Fwd":
+				anim_player.play("Crouch_Fwd")
+		else:
+			if anim_player.current_animation != "Crouch_Idle":
+				anim_player.play("Crouch_Idle")
+
+	# Update Dynamic Velocity and State Annotation Label3D text
+	if velocity_label and is_instance_valid(velocity_label):
+		velocity_label.text = "Vx: %.1f m/s | Vy: %.1f m/s\nSTATE: %s" % [velocity.x, velocity.y, State.keys()[current_state]]
+
+func _apply_gravity(gravity: float, delta: float) -> void:
+	var applied_gravity = gravity
+	
+	if velocity.y < 0:
+		applied_gravity *= fall_gravity_multiplier
+	elif velocity.y >= 0 and abs(velocity.y) < 2.0:
+		applied_gravity *= apex_gravity_multiplier
+		
+	velocity.y -= applied_gravity * delta
+	
+	if velocity.y < -terminal_velocity:
+		velocity.y = -terminal_velocity
+		
+	if not is_on_floor():
+		if current_state != State.JUMP and current_state != State.DASH:
+			_change_state(State.JUMP)
+		elif current_state == State.JUMP and velocity.y < 0 and anim_player and anim_player.current_animation != "Jump_Land":
+			anim_player.play("Jump_Land")
+
+func _enforce_planar_constraints() -> void:
+	velocity.z = 0.0
+	if global_position.z != 0.0:
+		global_position.z = 0.0
+
+func _start_dash(dash_duration: float, dash_cooldown: float) -> void:
+	is_dashing = true
+	dash_time_left = dash_duration
+	dash_cooldown_left = dash_cooldown
+	_change_state(State.DASH)
+	if velocity.x == 0:
+		velocity.x = last_facing_dir * base_dash_speed
+
+func _handle_wall_jump() -> void:
+	var wall_normal = get_wall_normal()
+	velocity.x = wall_normal.x * wall_jump_push_force
+	velocity.y = wall_jump_up_force
+	last_facing_dir = wall_normal.x
+
+func _start_blocking(block_duration: float, block_cooldown: float) -> void:
+	is_blocking = true
+	block_time_left = block_duration
+	block_cooldown_left = block_cooldown
+	_change_state(State.BLOCK)
+	if block_shield:
+		block_shield.show()
+		block_shield.monitoring = true
+		block_shield.monitorable = true
+
+func _stop_blocking() -> void:
+	is_blocking = false
+	_change_state(State.IDLE)
+	if block_shield:
+		block_shield.hide()
+		block_shield.monitoring = false
+		block_shield.monitorable = false
+
+func _change_state(new_state: State) -> void:
+	current_state = new_state
+	if anim_player:
+		match new_state:
+			State.IDLE:
+				anim_player.play("Idle")
+			State.MOVE:
+				anim_player.play("Sprint")
+			State.JUMP:
+				anim_player.play("Jump_Start")
+				anim_player.queue("Jump")
+			State.BLOCK:
+				anim_player.play("Idle")
+			State.DASH:
+				anim_player.play("Roll")
+			State.CROUCH:
+				if velocity.x != 0:
+					anim_player.play("Crouch_Fwd")
+				else:
+					anim_player.play("Crouch_Idle")
+
+func _start_reload(reload_time: float) -> void:
+	if not is_reloading:
+		is_reloading = true
+		reload_time_left = reload_time
+
+func _shoot(projectiles_per_shot: int) -> void:
+	if projectile_scene and gun_muzzle:
+		var flash = gun_muzzle.get_node_or_null("MuzzleFlash")
+		if flash:
+			flash.visible = true
+			flash.scale = Vector3.ONE * randf_range(3.8, 5.2) 
+			get_tree().create_timer(0.05).timeout.connect(func(): flash.visible = false)
+			
+		var base_aim_dir = last_aim_dir
+		
+		# Resolve aim direction
+		var joy_x = Input.get_joy_axis(player_index - 1, JoyAxis.JOY_AXIS_RIGHT_X)
+		var joy_y = -Input.get_joy_axis(player_index - 1, JoyAxis.JOY_AXIS_RIGHT_Y)
+		var camera = get_viewport().get_camera_3d()
+		
+		if abs(joy_x) > 0.25 or abs(joy_y) > 0.25:
+			base_aim_dir = Vector3(joy_x, joy_y, 0.0).normalized()
+		elif player_index == 1 and camera:
+			var mouse_pos = get_viewport().get_mouse_position()
+			var distance = camera.global_position.z - global_position.z
+			var target_pos = camera.project_position(mouse_pos, distance)
+			target_pos.z = 0.0
+			base_aim_dir = (target_pos - gun_muzzle.global_position).normalized()
+			
+		# Inherit only horizontal momentum
+		var horiz_vel = Vector3(velocity.x, 0, velocity.z)
+		var inherited_speed = max(0.0, horiz_vel.dot(base_aim_dir))
+		
+		var dynamic_damage = stat_engine.get_stat("projectile_damage", 25.0)
+		var dynamic_speed = stat_engine.get_stat("projectile_speed", 15.0)
+		var spread_deg = stat_engine.get_stat("projectile_spread_degrees", 15.0)
+		
+		var start_angle = -spread_deg / 2.0 if projectiles_per_shot > 1 else 0.0
+		var angle_step = spread_deg / (projectiles_per_shot - 1) if projectiles_per_shot > 1 else 0.0
+		
+		for i in range(projectiles_per_shot):
+			var proj = projectile_scene.instantiate()
+			
+			# Dynamically bind card properties
+			proj.damage = dynamic_damage
+			proj.speed = dynamic_speed
+			proj.shooter = self
+			
+			# Bullet physical scale matches caliber!
+			var visual_scale = clamp(dynamic_damage / 25.0, 0.45, 2.5)
+			proj.scale = Vector3.ONE * visual_scale
+			
+			get_parent().add_child(proj)
+			proj.global_position = gun_muzzle.global_position
+			
+			var current_angle = deg_to_rad(start_angle + (i * angle_step))
+			var aim_dir = base_aim_dir.rotated(Vector3.FORWARD, current_angle)
+			
+			proj.velocity = aim_dir * (proj.speed + inherited_speed)
+
+func _use_utility() -> void:
+	if utility_scene and gun_muzzle:
+		utility_cooldown_left = utility_cooldown
+		
+		var utility_instance = utility_scene.instantiate()
+		get_parent().add_child(utility_instance)
+		utility_instance.global_position = gun_muzzle.global_position
+		
+		var base_aim_dir = last_aim_dir
+		var joy_x = Input.get_joy_axis(player_index - 1, JoyAxis.JOY_AXIS_RIGHT_X)
+		var joy_y = -Input.get_joy_axis(player_index - 1, JoyAxis.JOY_AXIS_RIGHT_Y)
+		var camera = get_viewport().get_camera_3d()
+		
+		if abs(joy_x) > 0.25 or abs(joy_y) > 0.25:
+			base_aim_dir = Vector3(joy_x, joy_y, 0.0).normalized()
+		elif player_index == 1 and camera:
+			var mouse_pos = get_viewport().get_mouse_position()
+			var distance = camera.global_position.z - global_position.z
+			var target_pos = camera.project_position(mouse_pos, distance)
+			target_pos.z = 0.0
+			base_aim_dir = (target_pos - gun_muzzle.global_position).normalized()
+			
+		if utility_instance is RigidBody3D:
+			utility_instance.linear_velocity = base_aim_dir * utility_throw_force
+
+func _setup_inputs() -> void:
+	# Clean mappings with p1_/p2_ prefixes to completely separate multi-client actions
+	if player_index == 1:
+		_add_action_if_missing("p1_move_left", KEY_A, JoyButton.JOY_BUTTON_DPAD_LEFT)
+		_add_action_if_missing("p1_move_right", KEY_D, JoyButton.JOY_BUTTON_DPAD_RIGHT)
+		_add_action_if_missing("p1_jump", KEY_SPACE, JoyButton.JOY_BUTTON_A)
+		_add_action_if_missing("p1_dash", KEY_SHIFT, JoyButton.JOY_BUTTON_RIGHT_SHOULDER)
+		_add_action_if_missing("p1_block", KEY_E, JoyAxis.JOY_AXIS_TRIGGER_LEFT)
+		_add_action_if_missing("p1_shoot", MOUSE_BUTTON_LEFT, JoyAxis.JOY_AXIS_TRIGGER_RIGHT)
+		_add_action_if_missing("p1_reload", KEY_R, JoyButton.JOY_BUTTON_X)
+		_add_action_if_missing("p1_utility", MOUSE_BUTTON_MIDDLE, JoyButton.JOY_BUTTON_Y)
+		_add_action_if_missing("p1_crouch", KEY_S, JoyButton.JOY_BUTTON_DPAD_DOWN)
+	else:
+		_add_action_if_missing("p2_move_left", KEY_LEFT, JoyButton.JOY_BUTTON_DPAD_LEFT)
+		_add_action_if_missing("p2_move_right", KEY_RIGHT, JoyButton.JOY_BUTTON_DPAD_RIGHT)
+		_add_action_if_missing("p2_jump", KEY_UP, JoyButton.JOY_BUTTON_A)
+		_add_action_if_missing("p2_dash", KEY_N, JoyButton.JOY_BUTTON_RIGHT_SHOULDER)
+		_add_action_if_missing("p2_block", KEY_O, JoyAxis.JOY_AXIS_TRIGGER_LEFT)
+		_add_action_if_missing("p2_shoot", KEY_I, JoyAxis.JOY_AXIS_TRIGGER_RIGHT)
+		_add_action_if_missing("p2_reload", KEY_P, JoyButton.JOY_BUTTON_X)
+		_add_action_if_missing("p2_utility", KEY_U, JoyButton.JOY_BUTTON_Y)
+		_add_action_if_missing("p2_crouch", KEY_DOWN, JoyButton.JOY_BUTTON_DPAD_DOWN)
+
+func _add_action_if_missing(action_name: String, keycode: int, joy_btn_or_axis: int = -1) -> void:
+	if not InputMap.has_action(action_name):
+		InputMap.add_action(action_name)
+		
+		# Keyboard / Mouse Event
+		var event
+		if keycode == MOUSE_BUTTON_LEFT or keycode == MOUSE_BUTTON_MIDDLE:
+			event = InputEventMouseButton.new()
+			event.button_index = keycode
+		else:
+			event = InputEventKey.new()
+			event.physical_keycode = keycode
+		InputMap.action_add_event(action_name, event)
+		
+		# Joypad Button or Axis Event (L2/R2 triggers are axes in Godot 4)
+		if joy_btn_or_axis != -1:
+			if joy_btn_or_axis == JoyAxis.JOY_AXIS_TRIGGER_LEFT or joy_btn_or_axis == JoyAxis.JOY_AXIS_TRIGGER_RIGHT:
+				var joy_motion = InputEventJoypadMotion.new()
+				joy_motion.device = player_index - 1
+				joy_motion.axis = joy_btn_or_axis
+				joy_motion.axis_value = 1.0 # full trigger press limit
+				InputMap.action_add_event(action_name, joy_motion)
+			else:
+				var joy_event = InputEventJoypadButton.new()
+				joy_event.device = player_index - 1
+				joy_event.button_index = joy_btn_or_axis
+				InputMap.action_add_event(action_name, joy_event)
+			
+	# Append analog stick bounds for movement
+	var is_left = action_name.ends_with("move_left")
+	var is_right = action_name.ends_with("move_right")
+	if is_left or is_right:
+		var joy_motion = InputEventJoypadMotion.new()
+		joy_motion.device = player_index - 1
+		joy_motion.axis = JoyAxis.JOY_AXIS_LEFT_X
+		joy_motion.axis_value = 1.0 if is_right else -1.0
+		InputMap.action_add_event(action_name, joy_motion)
+
+func set_redacted(active: bool) -> void:
+	if character_model:
+		character_model.visible = not active
+	if arm_sprite:
+		arm_sprite.visible = not active
+
+## Checks if there is sufficient clearance above the player to stand up
+func _can_stand_up() -> bool:
+	var space_state = get_world_3d().direct_space_state
+	if space_state == null:
+		return true
+		
+	# Raycast from three offset positions to cover entire player width (radius = 0.25m)
+	# In this scene, the player's feet are at Y = -0.96m and standing top is at Y = +0.86m (relative to origin).
+	# Cast from Y = -0.5m (crouched center) up to Y = +0.92m (standing top + safety margin)
+	var offsets = [0.0, -0.2, 0.2]
+	for offset in offsets:
+		var query = PhysicsRayQueryParameters3D.create(
+			global_position + Vector3(offset, -0.5, 0),
+			global_position + Vector3(offset, 0.92, 0),
+			collision_mask
+		)
+		query.exclude = [get_rid()]
+		var result = space_state.intersect_ray(query)
+		if not result.is_empty():
+			return false # Obstructed!
+			
+	return true # All clear!
