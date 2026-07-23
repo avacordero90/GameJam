@@ -12,7 +12,7 @@ const OBSTACLE_MAX_STRENGTH: int = 5
 
 var _grid: GridMapData
 
-@onready var player: Node2D = $Player
+@onready var player: Player = $Player
 @onready var energy_label: Label = %EnergyLabel
 @onready var inventory_label: Label = %InventoryLabel
 
@@ -23,7 +23,9 @@ func _ready() -> void:
 	_grid = GridMapData.new(GRID_WIDTH, GRID_HEIGHT)
 	_grid.generate_empty()
 	var start_position := Vector2i(1, 1)
-	_grid.scatter_obstacles(OBSTACLE_COUNT, OBSTACLE_MIN_STRENGTH, OBSTACLE_MAX_STRENGTH, start_position)
+	_grid.scatter_obstacles(
+		OBSTACLE_COUNT, OBSTACLE_MIN_STRENGTH, OBSTACLE_MAX_STRENGTH, start_position
+	)
 	player.setup(_grid, start_position)
 	player.energy_changed.connect(_on_player_energy_changed)
 	player.inventory_changed.connect(_on_player_inventory_changed)
@@ -49,7 +51,9 @@ func _tile_color(tile: GridTileData) -> Color:
 		GridTileData.TileType.WALL:
 			return Color.DIM_GRAY
 		GridTileData.TileType.OBSTACLE:
-			return Color.ORANGE_RED.lerp(Color.DARK_RED, tile.obstacle_strength / float(OBSTACLE_MAX_STRENGTH))
+			return Color.ORANGE_RED.lerp(
+				Color.DARK_RED, tile.obstacle_strength / float(OBSTACLE_MAX_STRENGTH)
+			)
 		_:
 			return Color.DARK_SLATE_GRAY
 

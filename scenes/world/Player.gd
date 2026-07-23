@@ -1,3 +1,4 @@
+class_name Player
 extends Node2D
 ## Grid-based player: moves one tile per input press along the four
 ## directional actions, deducting energy per turn. Obstacles consume a
