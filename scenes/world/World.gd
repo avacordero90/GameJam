@@ -1,35 +1,35 @@
 extends Node2D
-## Phase 2 scratch test map: layers obstacles and weighted tool spawns on
-## top of the Phase 1 empty grid, to playtest the "cheap tools only run
-## falls short" energy tension (see project_plan.md Day 2). No guards or
-## real levels yet -- those land in later phases.
+## Day 3: loads Level 1 (Easy) from a data file (project_plan.md), adds
+## guards that wander after each player turn, and checks the same-tile
+## catch condition and the has_loot+exit win condition. Win/lose screens
+## stay plain-text status labels for now -- real screens are Day 4 polish.
 
-const GRID_WIDTH: int = 9
-const GRID_HEIGHT: int = 9
-const OBSTACLE_COUNT: int = 6
-const OBSTACLE_MIN_STRENGTH: int = 1
-const OBSTACLE_MAX_STRENGTH: int = 5
+const LEVEL_PATH: String = "res://resources/levels/level_1_easy.tres"
+const GUARD_SCENE: PackedScene = preload("res://scenes/world/Guard.tscn")
 
 var _grid: GridMapData
+var _guards: Array[Guard] = []
 
 @onready var player: Player = $Player
 @onready var energy_label: Label = %EnergyLabel
 @onready var inventory_label: Label = %InventoryLabel
+@onready var status_label: Label = %StatusLabel
 
 
 func _ready() -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		GameManager.current_state = GameManager.GameState.PLAYING
-	_grid = GridMapData.new(GRID_WIDTH, GRID_HEIGHT)
-	_grid.generate_empty()
-	var start_position := Vector2i(1, 1)
-	_grid.scatter_obstacles(
-		OBSTACLE_COUNT, OBSTACLE_MIN_STRENGTH, OBSTACLE_MAX_STRENGTH, start_position
-	)
-	player.setup(_grid, start_position)
+	var level: LevelData = load(LEVEL_PATH)
+	_grid = GridMapData.from_level(level)
+	player.setup(_grid, level.start_position)
+	for guard_start in level.guard_start_positions:
+		var guard: Guard = GUARD_SCENE.instantiate()
+		add_child(guard)
+		guard.setup(_grid, guard_start)
+		_guards.append(guard)
 	player.energy_changed.connect(_on_player_energy_changed)
 	player.inventory_changed.connect(_on_player_inventory_changed)
-	player.moved.connect(_on_player_moved)
+	player.moved.connect(_on_player_turn)
 	_on_player_energy_changed(player.energy)
 	_on_player_inventory_changed(player.inventory)
 	queue_redraw()
@@ -51,9 +51,12 @@ func _tile_color(tile: GridTileData) -> Color:
 		GridTileData.TileType.WALL:
 			return Color.DIM_GRAY
 		GridTileData.TileType.OBSTACLE:
-			return Color.ORANGE_RED.lerp(
-				Color.DARK_RED, tile.obstacle_strength / float(OBSTACLE_MAX_STRENGTH)
-			)
+			var max_strength := float(Balance.TOOL_TIER_WEIGHTS.size())
+			return Color.ORANGE_RED.lerp(Color.DARK_RED, tile.obstacle_strength / max_strength)
+		GridTileData.TileType.LOOT:
+			return Color.GOLDENROD
+		GridTileData.TileType.EXIT:
+			return Color.SEA_GREEN
 		_:
 			return Color.DARK_SLATE_GRAY
 
@@ -73,5 +76,29 @@ func _on_player_inventory_changed(inventory: Array) -> void:
 	inventory_label.text = text
 
 
-func _on_player_moved(_new_grid_position: Vector2i) -> void:
+func _on_player_turn(_new_grid_position: Vector2i) -> void:
+	for guard in _guards:
+		guard.maybe_move()
 	queue_redraw()
+	if GameManager.current_state != GameManager.GameState.PLAYING:
+		return
+	if _is_player_caught():
+		status_label.text = "Caught! Game over."
+		GameManager.game_over()
+	elif _is_player_won():
+		status_label.text = "You win!"
+		GameManager.game_over()
+
+
+func _is_player_caught() -> bool:
+	for guard in _guards:
+		if guard.grid_position == player.grid_position:
+			return true
+	return false
+
+
+func _is_player_won() -> bool:
+	if not player.has_loot:
+		return false
+	var tile := _grid.get_tile(player.grid_position)
+	return tile != null and tile.type == GridTileData.TileType.EXIT
