@@ -1,14 +1,18 @@
 extends Node2D
-## Day 3: loads Level 1 (Easy) from a data file (project_plan.md), adds
-## guards that wander after each player turn, and checks the same-tile
-## catch condition and the has_loot+exit win condition. Win/lose screens
-## stay plain-text status labels for now -- real screens are Day 4 polish.
+## Day 4: plays both levels back to back -- clearing Level 1 (Easy) loads
+## Level 2 (Hard) with the player's carried-over energy/inventory instead
+## of ending the run; only clearing the final level is a full win. Guards
+## and grid state are rebuilt per level. Win/lose stays a plain-text
+## status label per the cut-line default in project_plan.md.
 
-const LEVEL_PATH: String = "res://resources/levels/level_1_easy.tres"
+const LEVEL_PATHS: Array[String] = [
+	"res://resources/levels/level_1_easy.tres", "res://resources/levels/level_2_hard.tres"
+]
 const GUARD_SCENE: PackedScene = preload("res://scenes/world/Guard.tscn")
 
 var _grid: GridMapData
 var _guards: Array[Guard] = []
+var _level_index: int = 0
 
 @onready var player: Player = $Player
 @onready var energy_label: Label = %EnergyLabel
@@ -19,20 +23,10 @@ var _guards: Array[Guard] = []
 func _ready() -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		GameManager.current_state = GameManager.GameState.PLAYING
-	var level: LevelData = load(LEVEL_PATH)
-	_grid = GridMapData.from_level(level)
-	player.setup(_grid, level.start_position)
-	for guard_start in level.guard_start_positions:
-		var guard: Guard = GUARD_SCENE.instantiate()
-		add_child(guard)
-		guard.setup(_grid, guard_start)
-		_guards.append(guard)
 	player.energy_changed.connect(_on_player_energy_changed)
 	player.inventory_changed.connect(_on_player_inventory_changed)
 	player.moved.connect(_on_player_turn)
-	_on_player_energy_changed(player.energy)
-	_on_player_inventory_changed(player.inventory)
-	queue_redraw()
+	_load_level(0)
 
 
 func _draw() -> void:
@@ -86,8 +80,7 @@ func _on_player_turn(_new_grid_position: Vector2i) -> void:
 		status_label.text = "Caught! Game over."
 		GameManager.game_over()
 	elif _is_player_won():
-		status_label.text = "You win!"
-		GameManager.game_over()
+		_advance_to_next_level()
 
 
 func _is_player_caught() -> bool:
@@ -102,3 +95,31 @@ func _is_player_won() -> bool:
 		return false
 	var tile := _grid.get_tile(player.grid_position)
 	return tile != null and tile.type == GridTileData.TileType.EXIT
+
+
+func _advance_to_next_level() -> void:
+	if _level_index + 1 < LEVEL_PATHS.size():
+		status_label.text = "Level %d cleared! Moving on..." % (_level_index + 1)
+		_load_level(_level_index + 1)
+	else:
+		status_label.text = "You escaped with the loot -- you win!"
+		GameManager.game_over()
+
+
+func _load_level(index: int) -> void:
+	_level_index = index
+	for guard in _guards:
+		guard.queue_free()
+	_guards.clear()
+	var level: LevelData = load(LEVEL_PATHS[index])
+	_grid = GridMapData.from_level(level)
+	player.has_loot = false
+	player.setup(_grid, level.start_position)
+	for guard_start in level.guard_start_positions:
+		var guard: Guard = GUARD_SCENE.instantiate()
+		add_child(guard)
+		guard.setup(_grid, guard_start)
+		_guards.append(guard)
+	_on_player_energy_changed(player.energy)
+	_on_player_inventory_changed(player.inventory)
+	queue_redraw()
