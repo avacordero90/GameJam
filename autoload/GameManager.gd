@@ -45,5 +45,9 @@ func game_over() -> void:
 	state_changed.emit(current_state)
 
 
+func restart_game() -> void:
+	start_game()
+
+
 func quit_game() -> void:
 	get_tree().quit()
