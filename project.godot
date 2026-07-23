@@ -18,3 +18,4 @@ config/features=PackedStringArray("4.7")
 
 GameManager="*res://autoload/GameManager.gd"
 SceneManager="*res://autoload/SceneManager.gd"
+Balance="*res://autoload/Balance.gd"
