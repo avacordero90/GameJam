@@ -14,6 +14,24 @@ func _init(p_width: int, p_height: int) -> void:
 	height = p_height
 
 
+static func from_level(level: LevelData) -> GridMapData:
+	var grid := GridMapData.new(level.width, level.height)
+	grid.generate_empty()
+	for pos: Vector2i in level.wall_positions:
+		grid.get_tile(pos).type = GridTileData.TileType.WALL
+	for i in range(level.obstacle_positions.size()):
+		var tile := grid.get_tile(level.obstacle_positions[i])
+		tile.type = GridTileData.TileType.OBSTACLE
+		tile.obstacle_strength = level.obstacle_strengths[i]
+	grid.get_tile(level.loot_position).type = GridTileData.TileType.LOOT
+	grid.get_tile(level.exit_position).type = GridTileData.TileType.EXIT
+	if level.starting_tool_tier > 0:
+		grid.tools_on_ground[level.starting_tool_position] = ToolData.for_tier(
+			level.starting_tool_tier
+		)
+	return grid
+
+
 func generate_empty(border_walls: bool = true) -> void:
 	for x in range(width):
 		for y in range(height):
@@ -33,6 +51,13 @@ func is_walkable(pos: Vector2i) -> bool:
 	if tile == null:
 		return false
 	return tile.type != GridTileData.TileType.WALL
+
+
+func is_open_for_guard(pos: Vector2i) -> bool:
+	var tile := get_tile(pos)
+	if tile == null:
+		return false
+	return tile.type != GridTileData.TileType.WALL and tile.type != GridTileData.TileType.OBSTACLE
 
 
 func scatter_obstacles(count: int, min_strength: int, max_strength: int, exclude: Vector2i) -> void:

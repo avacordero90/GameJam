@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="LevelData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/level/level_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+width = 9
+height = 9
+start_position = Vector2i(1, 1)
+loot_position = Vector2i(7, 7)
+exit_position = Vector2i(7, 1)
+wall_positions = Array[Vector2i]([])
+obstacle_positions = Array[Vector2i]([Vector2i(3, 1), Vector2i(5, 2), Vector2i(2, 4), Vector2i(6, 5), Vector2i(4, 6)])
+obstacle_strengths = Array[int]([1, 2, 1, 2, 1])
+guard_start_positions = Array[Vector2i]([Vector2i(4, 4)])
+starting_tool_position = Vector2i(2, 1)
+starting_tool_tier = 2

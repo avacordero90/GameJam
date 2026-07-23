@@ -13,6 +13,7 @@ var grid_position: Vector2i = Vector2i.ZERO
 var energy: int = Balance.START_ENERGY
 var move_count: int = 0
 var inventory: Array[ToolData] = []
+var has_loot: bool = false
 
 var _grid: GridMapData
 
@@ -76,6 +77,10 @@ func _move_to(target: Vector2i) -> void:
 		inventory.append(_grid.tools_on_ground[target])
 		_grid.tools_on_ground.erase(target)
 		inventory_changed.emit(inventory)
+	var tile := _grid.get_tile(target)
+	if tile.type == GridTileData.TileType.LOOT:
+		has_loot = true
+		tile.type = GridTileData.TileType.FLOOR
 
 
 func _take_usable_tool(obstacle_strength: int) -> ToolData:
