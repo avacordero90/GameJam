@@ -37,7 +37,8 @@ func _draw() -> void:
 		draw_rect(rect, Color.BLACK, false, 1.0)
 	for pos: Vector2i in _grid.tools_on_ground:
 		var center := Vector2(pos * Balance.TILE_SIZE) + Vector2.ONE * Balance.TILE_SIZE / 2.0
-		draw_circle(center, Balance.TILE_SIZE * 0.2, Color.GOLD)
+		var tool: ToolData = _grid.tools_on_ground[pos]
+		draw_circle(center, Balance.TILE_SIZE * 0.2, Balance.tier_color(tool.tier))
 
 
 func _tile_color(tile: GridTileData) -> Color:
@@ -45,8 +46,7 @@ func _tile_color(tile: GridTileData) -> Color:
 		GridTileData.TileType.WALL:
 			return Color.DIM_GRAY
 		GridTileData.TileType.OBSTACLE:
-			var max_strength := float(Balance.TOOL_TIER_WEIGHTS.size())
-			return Color.ORANGE_RED.lerp(Color.DARK_RED, tile.obstacle_strength / max_strength)
+			return Balance.tier_color(tile.obstacle_strength)
 		GridTileData.TileType.LOOT:
 			return Color.GOLDENROD
 		GridTileData.TileType.EXIT:
