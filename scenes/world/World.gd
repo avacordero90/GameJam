@@ -114,7 +114,7 @@ func _load_level(index: int) -> void:
 	var level: LevelData = load(LEVEL_PATHS[index])
 	_grid = GridMapData.from_level(level)
 	player.has_loot = false
-	player.setup(_grid, level.start_position)
+	player.setup(_grid, level.start_position, level.width, level.height)
 	for guard_start in level.guard_start_positions:
 		var guard: Guard = GUARD_SCENE.instantiate()
 		add_child(guard)

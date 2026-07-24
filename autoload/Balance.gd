@@ -14,5 +14,5 @@ const TIER_COLORS: Array[Color] = [
 ]
 
 
-static func tier_color(tier: int) -> Color:
+func tier_color(tier: int) -> Color:
 	return TIER_COLORS[clampi(tier, 1, TIER_COLORS.size()) - 1]

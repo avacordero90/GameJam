@@ -17,11 +17,20 @@ var has_loot: bool = false
 
 var _grid: GridMapData
 
+@onready var _camera: Camera2D = $Camera2D
 
-func setup(grid: GridMapData, start_position: Vector2i) -> void:
+
+func setup(
+	grid: GridMapData, start_position: Vector2i, level_width: int, level_height: int
+) -> void:
 	_grid = grid
 	grid_position = start_position
 	position = Vector2(grid_position * Balance.TILE_SIZE)
+	_camera.limit_left = 0
+	_camera.limit_top = 0
+	_camera.limit_right = level_width * Balance.TILE_SIZE
+	_camera.limit_bottom = level_height * Balance.TILE_SIZE
+	_camera.reset_smoothing()
 	queue_redraw()
 
 
