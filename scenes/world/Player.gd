@@ -34,6 +34,11 @@ func setup(
 	queue_redraw()
 
 
+func add_energy(amount: int) -> void:
+	energy += amount
+	energy_changed.emit(energy)
+
+
 func _draw() -> void:
 	var inset := 4.0
 	var size := Vector2.ONE * (Balance.TILE_SIZE - inset * 2.0)

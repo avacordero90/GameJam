@@ -1,12 +1,14 @@
 extends Node2D
-## Day 4: plays both levels back to back -- clearing Level 1 (Easy) loads
-## Level 2 (Hard) with the player's carried-over energy/inventory instead
-## of ending the run; only clearing the final level is a full win. Guards
-## and grid state are rebuilt per level. Win/lose stays a plain-text
-## status label per the cut-line default in project_plan.md.
+## Day 4: plays levels back to back -- clearing one loads the next with the
+## player's carried-over energy/inventory instead of ending the run; only
+## clearing the final level is a full win. Guards and grid state are
+## rebuilt per level. Win/lose stays a plain-text status label per the
+## cut-line default in project_plan.md.
 
 const LEVEL_PATHS: Array[String] = [
-	"res://resources/levels/level_1_easy.tres", "res://resources/levels/level_2_hard.tres"
+	"res://resources/levels/level_1_easy.tres",
+	"res://resources/levels/level_2_hard.tres",
+	"res://resources/levels/level_3_expert.tres",
 ]
 const GUARD_SCENE: PackedScene = preload("res://scenes/world/Guard.tscn")
 
@@ -98,11 +100,12 @@ func _is_player_won() -> bool:
 
 
 func _advance_to_next_level() -> void:
+	player.add_energy(Balance.level_clear_bonus(_level_index))
 	if _level_index + 1 < LEVEL_PATHS.size():
 		status_label.text = "Level %d cleared! Moving on..." % (_level_index + 1)
 		_load_level(_level_index + 1)
 	else:
-		status_label.text = "You escaped with the loot -- you win!"
+		status_label.text = "Good job! You escaped with the loot -- you win!"
 		GameManager.game_over()
 
 
