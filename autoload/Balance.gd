@@ -5,6 +5,8 @@ extends Node
 const TILE_SIZE: int = 48
 const START_ENERGY: int = 100
 const MOVE_COST: int = 1
+const LEVEL_CLEAR_ENERGY_BONUS_BASE: int = 100
+const LEVEL_CLEAR_ENERGY_BONUS_STEP: int = 25
 const SPAWN_INTERVAL: int = 5
 const TOOL_TIER_WEIGHTS: Array[int] = [35, 25, 20, 12, 8]
 const GUARD_MOVE_CHANCE: float = 0.65
@@ -16,3 +18,7 @@ const TIER_COLORS: Array[Color] = [
 
 func tier_color(tier: int) -> Color:
 	return TIER_COLORS[clampi(tier, 1, TIER_COLORS.size()) - 1]
+
+
+func level_clear_bonus(level_index: int) -> int:
+	return LEVEL_CLEAR_ENERGY_BONUS_BASE + LEVEL_CLEAR_ENERGY_BONUS_STEP * level_index
